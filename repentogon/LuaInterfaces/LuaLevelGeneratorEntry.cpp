@@ -2,29 +2,6 @@
 #include "LuaCore.h"
 #include "HookSystem.h"
 
-LUA_FUNCTION(Lua_LevelPlaceRoom) {
-	Game* game = lua::GetLuabridgeUserdata<Game*>(L, 1, lua::Metatables::LEVEL, "Game");
-	LevelGenerator_Room* room = lua::GetRawUserdata<LevelGenerator_Room*>(L, 2, lua::metatables::LevelGeneratorEntryMT);
-	RoomConfig_Room* config = lua::GetLuabridgeUserdata<RoomConfig_Room*>(L, 3, lua::Metatables::CONST_ROOM_CONFIG_ROOM, "RoomConfig");
-	uint32_t seed = (uint32_t)luaL_checkinteger(L, 4);
-
-	bool result = game->PlaceRoom(room, config, seed, 0);
-	lua_pushboolean(L, result);
-
-	if (result) {
-		// Fix doors for other rooms
-		uint32_t roomIdx = room->_gridLineIdx * 13 + room->_gridColIdx;
-		RoomDescriptor* descriptor = game->GetRoomByIdx(roomIdx, -1);
-
-		switch (descriptor->Data->Shape) {
-		case ROOMSHAPE_1x1:
-			break;
-		}
-	}
-
-	return 1;
-}
-
 LUA_FUNCTION(Lua_RoomPlacerSetColIdx) {
 	LevelGenerator_Room* room = lua::GetRawUserdata<LevelGenerator_Room*>(L, 1, lua::metatables::LevelGeneratorEntryMT);
 	room->_gridColIdx = (unsigned int)luaL_checkinteger(L, 2);
@@ -51,7 +28,6 @@ LUA_FUNCTION(Lua_LevelGeneratorEntry) {
 
 void RegisterRoomPlacer(lua_State* L) {
 	lua::RegisterGlobalClassFunction(L, lua::GlobalClasses::Isaac, "LevelGeneratorEntry", Lua_LevelGeneratorEntry);
-	lua::RegisterFunction(L, lua::Metatables::LEVEL, "PlaceRoom", Lua_LevelPlaceRoom);
 
 	luaL_Reg functions[] = {
 		{ "SetColIdx", Lua_RoomPlacerSetColIdx },

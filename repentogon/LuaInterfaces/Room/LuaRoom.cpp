@@ -482,6 +482,31 @@ HOOK_METHOD(Room, Init, (int param_1, RoomDescriptor * desc) -> void) {
 		this->_waterAmount = 1.0f;
 		//logger.Log("setting water\n");
 	}
+
+	if (desc && desc->Data) {
+		for (int s = 0; s < 8; s++) {
+			if (desc->Doors[s] >= 0 && (desc->AllowedDoors & (1 << s)) != 0) {
+				if (this->GetDoor(s) == nullptr) {
+					this->MakeDoor(s);
+					GridEntity_Door* door = this->GetDoor(s);
+					if (door) {
+						int targetIdx = desc->Doors[s];
+						door->_targetRoomIdx = targetIdx;
+						int dim = (desc->Dimension >= 0) ? desc->Dimension : -1;
+						RoomDescriptor* targetDesc = g_Game->GetRoomByIdx(targetIdx, dim);
+						if (targetDesc && targetDesc->Data) {
+							door->SetRoomTypes(desc->Data->Type, targetDesc->Data->Type);
+						}
+						Entity_Effect* outline = this->_redDoorOutlines[s];
+						if (outline) {
+							outline->Remove();
+							this->_redDoorOutlines[s] = nullptr;
+						}
+					}
+				}
+			}
+		}
+	}
 }
 
 HOOK_STATIC(Room, GetItemPool, (uint32_t seed, RoomDescriptor* roomDesc, int bossId) -> int, __cdecl) {
@@ -518,6 +543,45 @@ LUA_FUNCTION(Lua_RoomClearBossHazards) {
 	}
 	// this function only uses [this] to create an EntityRef, and the constructor cleanly handles cases where Entity is nullptr
 	source->ClearBossHazards(excludeNPCs);
+	return 0;
+}
+
+LUA_FUNCTION(Lua_RoomMakeDoor) {
+	Room* room = lua::GetLuabridgeUserdata<Room*>(L, 1, lua::Metatables::ROOM, lua::metatables::RoomMT);
+	int slot = (int)luaL_checkinteger(L, 2);
+	if (slot < 0 || slot >= 8) {
+		return luaL_argerror(L, 2, "Invalid door slot");
+	}
+
+	room->MakeDoor(slot);
+	GridEntity_Door* door = room->GetDoor(slot);
+	if (door) {
+		RoomDescriptor* currentRoomDesc = g_Game->GetCurrentRoomDesc();
+		if (room == g_Game->GetCurrentRoom() && currentRoomDesc && currentRoomDesc->Doors[slot] >= 0) {
+			int targetIdx = currentRoomDesc->Doors[slot];
+			door->_targetRoomIdx = targetIdx;
+			RoomDescriptor* targetDesc = g_Game->GetRoomByIdx(targetIdx, -1);
+			if (targetDesc && targetDesc->Data && currentRoomDesc->Data) {
+				door->SetRoomTypes(currentRoomDesc->Data->Type, targetDesc->Data->Type);
+				targetDesc->DisplayFlags |= 5;
+			}
+		}
+
+		if (room->GetFrameCount() > 0) {
+			door->play_animation();
+		}
+
+		Entity_Effect* outline = room->_redDoorOutlines[slot];
+		if (outline) {
+			outline->Remove();
+			room->_redDoorOutlines[slot] = nullptr;
+		}
+
+		g_Game->UpdateVisibility();
+
+		lua::luabridge::UserdataPtr::push(L, door, lua::GetMetatableKey(lua::Metatables::GRID_ENTITY_DOOR));
+		return 1;
+	}
 	return 0;
 }
 
@@ -574,7 +638,8 @@ HOOK_METHOD(LuaEngine, RegisterClasses, () -> void) {
 		{ "GetItemPool", Lua_RoomGetItemPool },
 		{ "TriggerOutput", Lua_RoomTriggerOutput },
 		{ "ClearBossHazards", Lua_RoomClearBossHazards },
-		{"TriggerRestock",Lua_RoomTriggerRestock},
+		{ "TriggerRestock", Lua_RoomTriggerRestock },
+		{ "MakeDoor", Lua_RoomMakeDoor },
 		{ NULL, NULL }
 	};
 	lua::RegisterFunctions(_state, lua::Metatables::ROOM, functions);

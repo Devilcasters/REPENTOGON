@@ -44,6 +44,14 @@ LUA_FUNCTION(Lua_GridEntityDoor_PlayAnimation) {
 	return 0;
 }
 
+LUA_FUNCTION(Lua_GridEntityDoor_SetRoomTypes) {
+	GridEntity_Door* gridEnt = lua::GetLuabridgeUserdata<GridEntity_Door*>(L, 1, lua::Metatables::GRID_ENTITY_DOOR, "GridEntityDoor");
+	int currentRoomType = (int)luaL_checkinteger(L, 2);
+	int targetRoomType = (int)luaL_checkinteger(L, 3);
+	gridEnt->SetRoomTypes(currentRoomType, targetRoomType);
+	return 0;
+}
+
 HOOK_METHOD(LuaEngine, RegisterClasses, () -> void) {
 	super();
 
@@ -51,6 +59,7 @@ HOOK_METHOD(LuaEngine, RegisterClasses, () -> void) {
 	luaL_Reg functions[] = {
 		{ "GetExtraSprite", Lua_GridEntityDoor_GetExtraSprite },
 		{ "PlayAnimation", Lua_GridEntityDoor_PlayAnimation },
+		{ "SetRoomTypes", Lua_GridEntityDoor_SetRoomTypes },
 		{ NULL, NULL }
 	};
 	lua::RegisterFunctions(_state, lua::Metatables::GRID_ENTITY_DOOR, functions);
