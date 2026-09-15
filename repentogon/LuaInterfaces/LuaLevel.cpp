@@ -386,6 +386,21 @@ static void ClearRoomDescriptor(RoomDescriptor& desc, int listIndex) {
 	desc.Group = 0;
 }
 
+static void PrintGeneratorError(const std::string& message) {
+	g_Game->GetConsole()->PrintError(message);
+	KAGE::LogMessage(3, message.c_str());
+}
+
+static std::string FormatRoomCriteria(int grid_index, int stage, int type, int shape, int mode, int minVariant, int maxVariant, int subtype, bool explicit_doors, int doors) {
+	std::string s = "for room at grid index " + std::to_string(grid_index) + " (stage: " + std::to_string(stage) + ", type: " + std::to_string(type) + ", shape: " + std::to_string(shape);
+	if (mode >= 0) s += ", mode: " + std::to_string(mode);
+	if (subtype >= 0) s += ", subtype: " + std::to_string(subtype);
+	if (minVariant > 0 || maxVariant >= 0) s += ", variant: [" + std::to_string(minVariant) + ".." + std::to_string(maxVariant) + "]";
+	if (explicit_doors && doors >= 0) s += ", doors: " + std::to_string(doors);
+	s += ")";
+	return s;
+}
+
 static bool IsValidStage(int stage) {
 	return stage >= 0 && (stage < STB_UNUSED1 || stage > STB_ULTRA_GREED) && stage != STB_THE_VOID && stage < NUM_STB;
 }
@@ -409,13 +424,16 @@ static bool InternalRemoveRoom(Level* level, RoomDescriptor* desc) {
 	Room* curRoom = g_Game->GetCurrentRoom();
 	RoomDescriptor* activeRoomDesc = curRoom ? curRoom->_descriptor : (g_Game->_room ? g_Game->_room->_descriptor : nullptr);
 	if (desc == currentRoomDesc || desc == activeRoomDesc || RoomOccupiesGridIndex(desc, (int)g_Game->_currentRoomIdx)) {
+		PrintGeneratorError("RemoveRoom: Cannot remove room at grid index " + std::to_string(desc->SafeGridIndex) + " because it contains a player");
 		return false;
 	}
 	if (g_Game->GetRoomTransition()->GetTransitionMode() != 0 && RoomOccupiesGridIndex(desc, (int)g_Game->_lastRoomIdx)) {
+		PrintGeneratorError("RemoveRoom: Cannot remove room at grid index " + std::to_string(desc->SafeGridIndex) + " during room transition");
 		return false;
 	}
 	if (g_Game->IsGreedMode() && g_Game->_startingRoomIdx < 169 && 
 		(desc->SafeGridIndex == (int)g_Game->_startingRoomIdx || desc->GridIndex == (int)g_Game->_startingRoomIdx || RoomOccupiesGridIndex(desc, (int)g_Game->_startingRoomIdx))) {
+		PrintGeneratorError("RemoveRoom: Cannot remove Greed Mode starting room at grid index " + std::to_string(desc->SafeGridIndex));
 		return false;
 	}
 
@@ -539,12 +557,13 @@ static bool InternalRemoveRoom(Level* level, RoomDescriptor* desc) {
 	return true;
 }
 
-static bool PrepareTargetLocation(Level* level, int targetCol, int targetRow, int shape, int dimension) {
+static bool PrepareTargetLocation(Level* level, int targetCol, int targetRow, int shape, int dimension, const char* callerName = "PlaceRandomRoom") {
 	int targetIdx = targetRow * 13 + targetCol;
 	XY targetBase(targetCol, targetRow);
 	std::vector<XY> newOccupied = GetOccupiedCoords(targetBase, shape);
 	for (const auto& xy : newOccupied) {
 		if (xy.ToGridIdx() < 0) {
+			PrintGeneratorError(std::string(callerName) + ": Room shape " + std::to_string(shape) + " at grid index " + std::to_string(targetIdx) + " exceeds floor grid boundaries");
 			return false;
 		}
 	}
@@ -552,6 +571,7 @@ static bool PrepareTargetLocation(Level* level, int targetCol, int targetRow, in
 	if (g_Game->IsGreedMode() && g_Game->_startingRoomIdx < 169) {
 		for (const auto& xy : newOccupied) {
 			if (xy.ToGridIdx() == (int)g_Game->_startingRoomIdx) {
+				PrintGeneratorError(std::string(callerName) + ": Cannot replace Greed Mode starting room at grid index " + std::to_string(xy.ToGridIdx()));
 				return false;
 			}
 		}
@@ -570,9 +590,11 @@ static bool PrepareTargetLocation(Level* level, int targetCol, int targetRow, in
 				RoomDescriptor* ex = g_Game->GetRoomByIdx(gIdx, dimension);
 				if (ex && ex->Data) {
 					if (ex == currentRoomDesc || ex == activeRoomDesc || RoomOccupiesGridIndex(ex, (int)g_Game->_currentRoomIdx)) {
+						PrintGeneratorError(std::string(callerName) + ": Cannot replace room at grid index " + std::to_string(gIdx) + " because it contains a player");
 						return false;
 					}
 					if (g_Game->GetRoomTransition()->GetTransitionMode() != 0 && RoomOccupiesGridIndex(ex, (int)g_Game->_lastRoomIdx)) {
+						PrintGeneratorError(std::string(callerName) + ": Cannot replace room at grid index " + std::to_string(gIdx) + " during room transition");
 						return false;
 					}
 					InternalRemoveRoom(level, ex);
@@ -861,11 +883,12 @@ LUA_FUNCTION(Lua_LevelPlaceRandomRoom) {
 	}
 
 	if (!config) {
+		PrintGeneratorError("PlaceRandomRoom: No matching STB room layout found " + FormatRoomCriteria(targetIdx, stage, type, shape, mode, minVariant, maxVariant, subtype, explicit_doors, allowed_doors));
 		lua_pushnil(L);
 		return 1;
 	}
 
-	if (!PrepareTargetLocation(level, col, row, config->Shape, dimension)) {
+	if (!PrepareTargetLocation(level, col, row, config->Shape, dimension, "PlaceRandomRoom")) {
 		lua_pushnil(L);
 		return 1;
 	}
@@ -880,6 +903,7 @@ LUA_FUNCTION(Lua_LevelPlaceRandomRoom) {
 
 	bool placed = game->PlaceRoom(&levelgenroom, config, seed, 0);
 	if (!placed) {
+		PrintGeneratorError("PlaceRandomRoom: Internal engine placement failed for room at grid index " + std::to_string(targetIdx));
 		lua_pushnil(L);
 		return 1;
 	}
@@ -909,6 +933,11 @@ LUA_FUNCTION(Lua_LevelPlaceRoomAtDoor) {
 
 	DoorSourceTarget doorSourceTarget = GetDoorSourceTarget(currentDesc->GridIndex, currentDesc->Data->Shape, doorSlot, false);
 	if (!doorSourceTarget.IsValid()) {
+		if (!LevelGenerator::has_shape_slot(currentDesc->Data->Shape, doorSlot, false)) {
+			PrintGeneratorError("PlaceRoomAtDoor: Door slot " + std::to_string(doorSlot) + " does not exist for room shape " + std::to_string(currentDesc->Data->Shape));
+		} else {
+			PrintGeneratorError("PlaceRoomAtDoor: Door slot " + std::to_string(doorSlot) + " at grid index " + std::to_string(currentDesc->SafeGridIndex) + " leads outside floor grid boundaries");
+		}
 		lua_pushnil(L);
 		return 1;
 	}
@@ -1027,6 +1056,22 @@ LUA_FUNCTION(Lua_LevelPlaceRoomAtDoor) {
 			}
 		}
 		if (returnDoorSlot == -1) {
+			if (shape != ROOMSHAPE_1x1) {
+				bool shapeHasReturnSlot = false;
+				for (int rSlot : GetPossibleReturnDoorSlots(doorSlot)) {
+					if (LevelGenerator::has_shape_slot(shape, rSlot, false)) {
+						shapeHasReturnSlot = true;
+						break;
+					}
+				}
+				if (!shapeHasReturnSlot) {
+					PrintGeneratorError("PlaceRoomAtDoor: Door slot " + std::to_string(doorSlot) + " has no matching return door for room shape " + std::to_string(shape));
+				} else {
+					PrintGeneratorError("PlaceRoomAtDoor: Door slot " + std::to_string(doorSlot) + " with room shape " + std::to_string(shape) + " cannot fit within floor grid boundaries");
+				}
+				lua_pushnil(L);
+				return 1;
+			}
 			returnDoorSlot = (doorSlot + 2) % 4;
 		}
 
@@ -1050,12 +1095,14 @@ LUA_FUNCTION(Lua_LevelPlaceRoomAtDoor) {
 			}
 		}
 		if (!config) {
+			PrintGeneratorError("PlaceRoomAtDoor: No matching STB room layout found " + FormatRoomCriteria(targetIdx, stage, type, shape, mode, minVariant, maxVariant, subtype, explicit_doors, allowed_doors));
 			lua_pushnil(L);
 			return 1;
 		}
 	} else if (lua_type(L, 3) == LUA_TUSERDATA) {
 		config = lua::GetLuabridgeUserdata<RoomConfig_Room*>(L, 3, lua::Metatables::CONST_ROOM_CONFIG_ROOM, "RoomConfig");
 		if (!config) {
+			PrintGeneratorError("PlaceRoomAtDoor: Invalid RoomConfig provided for room at grid index " + std::to_string(targetIdx));
 			lua_pushnil(L);
 			return 1;
 		}
@@ -1075,6 +1122,7 @@ LUA_FUNCTION(Lua_LevelPlaceRoomAtDoor) {
 			config = g_Game->GetRoomConfig()->GetRoomByStageTypeAndVariant(stb, type, variant, -1);
 		}
 		if (!config) {
+			PrintGeneratorError("PlaceRoomAtDoor: No matching room layout found for room at grid index " + std::to_string(targetIdx) + " (stage: " + std::to_string(stb) + ", type: " + std::to_string(type) + ", variant: " + std::to_string(variant) + ")");
 			lua_pushnil(L);
 			return 1;
 		}
@@ -1087,6 +1135,7 @@ LUA_FUNCTION(Lua_LevelPlaceRoomAtDoor) {
 			dimension = (int)luaL_checkinteger(L, 8);
 		}
 	} else {
+		PrintGeneratorError("PlaceRoomAtDoor: Invalid room arguments provided");
 		lua_pushnil(L);
 		return 1;
 	}
@@ -1110,6 +1159,7 @@ LUA_FUNCTION(Lua_LevelPlaceRoomAtDoor) {
 	}
 
 	if (!foundPlacement) {
+		PrintGeneratorError("PlaceRoomAtDoor: Door slot " + std::to_string(doorSlot) + " with room shape " + std::to_string(config->Shape) + " cannot fit within floor grid boundaries");
 		lua_pushnil(L);
 		return 1;
 	}
@@ -1122,7 +1172,7 @@ LUA_FUNCTION(Lua_LevelPlaceRoomAtDoor) {
 		seed = LuaCheckRoomPlacementSeed(L, 0, config->Shape, finalCol, finalRow);
 	}
 
-	if (!PrepareTargetLocation(level, finalCol, finalRow, config->Shape, dimension)) {
+	if (!PrepareTargetLocation(level, finalCol, finalRow, config->Shape, dimension, "PlaceRoomAtDoor")) {
 		lua_pushnil(L);
 		return 1;
 	}
@@ -1144,6 +1194,7 @@ LUA_FUNCTION(Lua_LevelPlaceRoomAtDoor) {
 
 	bool placed = game->PlaceRoom(&levelgenroom, config, seed, 0);
 	if (!placed) {
+		PrintGeneratorError("PlaceRoomAtDoor: Internal engine placement failed for room at grid index " + std::to_string(finalIdx));
 		lua_pushnil(L);
 		return 1;
 	}
